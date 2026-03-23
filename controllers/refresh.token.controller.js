@@ -1,32 +1,42 @@
+import jwt from "jsonwebtoken";
+import db from "../config/db.js";
+import {
+  JWT_REFRESH_SECRET
+} from "../config/jwt.js";
+import { generateAccessToken } from "../utils/generateToken.js";
+
 export const refresh = async (req, res) => {
-
   try {
+    const refreshToken =
+      req.body?.refreshToken ||
+      req.body?.token ||
+      null;
 
-    const { token } = req.body;
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    const user = await UserModel.getUserById(decoded.id);
-
-    if (!user) throw new Error();
-
-    if (decoded.tokenVersion !== user.token_version) {
-      return res.status(401).json({ error: "Token expirado" });
+    if (!refreshToken) {
+      return res.status(400).json({ error: "Refresh token requerido" });
     }
 
-    const newToken = jwt.sign(
-      {
-        id: user.id,
-        role: user.rol,
-        tokenVersion: user.token_version
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES }
+    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+
+    if (decoded.type !== "refresh") {
+      return res.status(401).json({ error: "Refresh inválido" });
+    }
+
+    const [rows] = await db.query(
+      "SELECT * FROM usuarios WHERE id = ? LIMIT 1",
+      [decoded.id]
     );
 
-    res.json({ accessToken: newToken });
+    if (!rows.length) {
+      return res.status(401).json({ error: "Usuario no encontrado" });
+    }
 
-  } catch {
-    res.status(401).json({ error: "Refresh inválido" });
+    const user = rows[0];
+    const accessToken = generateAccessToken(user);
+
+    return res.json({ accessToken });
+  } catch (err) {
+    console.error("REFRESH ERROR:", err);
+    return res.status(401).json({ error: "Refresh inválido o expirado" });
   }
 };

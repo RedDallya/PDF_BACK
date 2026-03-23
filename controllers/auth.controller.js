@@ -1,18 +1,23 @@
 import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
 import db from "../config/db.js";
-import { JWT_SECRET, JWT_EXPIRES } from "../config/jwt.js";
+import {
+  generateAccessToken,
+  generateRefreshToken
+} from "../utils/generateToken.js";
 
 /* =========================
 LOGIN
 ========================= */
 export const login = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username y password son requeridos" });
+    }
 
     const [rows] = await db.query(
-      "SELECT * FROM usuarios WHERE username = ?",
+      "SELECT * FROM usuarios WHERE username = ? LIMIT 1",
       [username]
     );
 
@@ -27,15 +32,20 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: "Credenciales inválidas" });
     }
 
-    const accessToken = jwt.sign(
-      { id: user.id, role: user.rol },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES }
-    );
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
 
-    res.json({ accessToken });
-
+    return res.json({
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        username: user.username,
+        rol: user.rol
+      }
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("LOGIN ERROR:", err);
+    return res.status(500).json({ error: "Error interno en login" });
   }
 };
