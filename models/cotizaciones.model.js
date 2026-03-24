@@ -87,31 +87,44 @@ export async function createCotizacion(conn, data) {
 /* =========================================
 UPDATE COTIZACION (conn, ownership validado)
 ========================================= */
-export async function updateCotizacion(conn, id, data) {
+export async function updateCotizacion(conn, id, data, userId) {
   const {
     titulo,
     condicion_legal,
     estado
   } = data;
 
-  await conn.query(
+  const [result] = await conn.query(
     `
-    UPDATE cotizaciones
-    SET titulo = ?,
-        condicion_legal = ?,
-        estado = ?
-    WHERE id = ?
+    UPDATE cotizaciones c
+    JOIN viajes v    ON c.viaje_id = v.id
+    JOIN clientes cl ON v.cliente_id = cl.id
+    SET 
+      c.titulo = ?,
+      c.condicion_legal = ?,
+      c.estado = ?
+    WHERE c.id = ?
+      AND cl.created_by = ?
     `,
-    [titulo, condicion_legal, estado, id]
+    [titulo, condicion_legal, estado, id, userId]
   );
-}
 
+  return result.affectedRows > 0;
+}
 /* =========================================
 DELETE COTIZACION (conn)
 ========================================= */
-export async function deleteCotizacion(conn, id) {
-  await conn.query(
-    `DELETE FROM cotizaciones WHERE id = ?`,
-    [id]
+export async function deleteCotizacion(conn, id, userId) {
+  const [result] = await conn.query(
+    `
+    DELETE c FROM cotizaciones c
+    JOIN viajes v    ON c.viaje_id = v.id
+    JOIN clientes cl ON v.cliente_id = cl.id
+    WHERE c.id = ?
+      AND cl.created_by = ?
+    `,
+    [id, userId]
   );
+
+  return result.affectedRows > 0;
 }

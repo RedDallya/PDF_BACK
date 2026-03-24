@@ -16,6 +16,17 @@ export const createCotizacion = async (req, res) => {
 
     await conn.beginTransaction();
 
+    // 🔐 VALIDAR VIAJE DEL USUARIO
+    const [viaje] = await conn.query(
+      `SELECT id FROM viajes WHERE id = ? AND created_by = ?`,
+      [req.body.viaje_id, userId]
+    );
+
+    if (!viaje.length) {
+      await conn.rollback();
+      return res.status(403).json({ error: "Viaje no válido" });
+    }
+
     const cotizacionId = await CotModel.createCotizacion(conn, {
       ...req.body,
       created_by: userId,
@@ -25,8 +36,10 @@ export const createCotizacion = async (req, res) => {
     await conn.commit();
 
     res.status(201).json({ id: cotizacionId });
+
   } catch (err) {
     await conn.rollback();
+    console.error("CREATE COT ERROR:", err);
     res.status(400).json({ error: err.message });
   } finally {
     conn.release();
@@ -64,7 +77,7 @@ export const getCotizacionFull = async (req, res) => {
       return res.status(404).json({ error: "Cotizacion no existe" });
     }
 
-    const servicios = await ServModel.getServiciosByCotizacion(req.params.id);
+    const servicios = await ServModel.getServiciosByCotizacion(req.params.id, userId);
 
     cot.servicios = servicios;
 
@@ -97,10 +110,12 @@ export const updateCotizacion = async (req, res) => {
       return res.status(404).json({ error: "Cotizacion no existe" });
     }
 
-    await CotModel.updateCotizacion(conn, req.params.id, {
-      ...req.body,
-      updated_by: userId
-    });
+    await CotModel.updateCotizacion(
+      conn,
+      req.params.id,
+      req.body,
+      userId
+    );
 
     await conn.commit();
 
@@ -134,7 +149,11 @@ export const deleteCotizacion = async (req, res) => {
       return res.status(404).json({ error: "Cotizacion no existe" });
     }
 
-    await CotModel.deleteCotizacion(conn, req.params.id);
+    await CotModel.deleteCotizacion(
+      conn,
+      req.params.id,
+      userId
+    );
 
     await conn.commit();
 

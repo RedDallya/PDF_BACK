@@ -1,5 +1,5 @@
 import express from "express";
-
+import authMiddleware from "../middlewares/auth.middleware.js";
 
 import {
   getTravelById,
@@ -9,10 +9,20 @@ import {
   deleteTravel
 } from "../controllers/viajes.controller.js";
 
-
-
-
 const router = express.Router();
+
+/*
+===========================
+PROTEGER TODAS LAS RUTAS
+===========================
+*/
+router.use(authMiddleware);
+
+/*
+===========================
+ROUTES
+===========================
+*/
 router.get("/cliente/:clienteId", getTravelsByClient);
 
 router.get("/:id", getTravelById);
