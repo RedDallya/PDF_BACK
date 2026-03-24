@@ -4,7 +4,7 @@ import * as MetaModel from "../models/serviciosMetadata.model.js";
 import { validateServicio } from "../validators/servicios.validator.js";
 
 /* =========================================
-GET SERVICIOS POR COTIZACION (ownership)
+GET SERVICIOS POR COTIZACION
 ========================================= */
 export const getServiciosByCotizacion = async (req, res) => {
   try {
@@ -26,12 +26,13 @@ export const getServiciosByCotizacion = async (req, res) => {
     res.json(full);
 
   } catch (err) {
+    console.error("GET SERVICIOS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
 /* =========================================
-GET SERVICIO BY ID (ownership)
+GET SERVICIO BY ID
 ========================================= */
 export const getServicioById = async (req, res) => {
   try {
@@ -49,12 +50,13 @@ export const getServicioById = async (req, res) => {
     res.json(servicio);
 
   } catch (err) {
+    console.error("GET SERVICIO ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
 /* =========================================
-CREATE SERVICIO (ownership por cotizacion)
+CREATE SERVICIO
 ========================================= */
 export const createServicio = async (req, res) => {
   const conn = await pool.getConnection();
@@ -85,6 +87,7 @@ export const createServicio = async (req, res) => {
 
   } catch (err) {
     await conn.rollback();
+    console.error("CREATE SERVICIO ERROR:", err);
     res.status(400).json({ error: err.message });
 
   } finally {
@@ -93,7 +96,7 @@ export const createServicio = async (req, res) => {
 };
 
 /* =========================================
-UPDATE SERVICIO (ownership)
+UPDATE SERVICIO
 ========================================= */
 export const updateServicio = async (req, res) => {
   const conn = await pool.getConnection();
@@ -113,8 +116,17 @@ export const updateServicio = async (req, res) => {
       return res.status(404).json({ error: "Servicio no existe" });
     }
 
-    await ServModel.updateServicio(conn, id, data, userId);
+    // 🔥 FIX: usar req.body
+    await ServModel.updateServicio(conn, id, req.body, userId);
 
+    // 🔥 NUEVO: actualizar metadata
+    if (req.body.metadata) {
+      await MetaModel.saveServicioMetadata(
+        conn,
+        id,
+        req.body.metadata
+      );
+    }
 
     await conn.commit();
 
@@ -122,6 +134,7 @@ export const updateServicio = async (req, res) => {
 
   } catch (err) {
     await conn.rollback();
+    console.error("UPDATE SERVICIO ERROR:", err);
     res.status(400).json({ error: err.message });
 
   } finally {
@@ -130,7 +143,7 @@ export const updateServicio = async (req, res) => {
 };
 
 /* =========================================
-DELETE SERVICIO (ownership)
+DELETE SERVICIO
 ========================================= */
 export const deleteServicio = async (req, res) => {
   const conn = await pool.getConnection();
@@ -156,6 +169,7 @@ export const deleteServicio = async (req, res) => {
 
   } catch (err) {
     await conn.rollback();
+    console.error("DELETE SERVICIO ERROR:", err);
     res.status(500).json({ error: err.message });
 
   } finally {

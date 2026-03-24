@@ -1,4 +1,3 @@
-// pdf.controller.js
 import PDFDocument from "pdfkit";
 import pool from "../config/db.js";
 import path from "path";
@@ -26,116 +25,152 @@ export async function generateFullPdf(req, res) {
 ================================ */
 
 async function generatePdf(req, res, mode) {
-  const cotizacion_id = req.body?.cotizacion_id || req.query?.cotizacion_id;
+  try {
+    const userId = req.user?.id;
+    const cotizacion_id = req.body?.cotizacion_id || req.query?.cotizacion_id;
 
-  if (!cotizacion_id) {
-    return res.status(400).json({ error: "cotizacion_id requerido" });
+    if (!userId) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    if (!cotizacion_id) {
+      return res.status(400).json({ error: "cotizacion_id requerido" });
+    }
+
+    /* 🔐 VALIDAR OWNERSHIP */
+    const [[cot]] = await pool.query(
+      `
+      SELECT co.id
+      FROM cotizaciones co
+      JOIN viajes v    ON co.viaje_id = v.id
+      JOIN clientes cl ON v.cliente_id = cl.id
+      WHERE co.id = ?
+        AND cl.created_by = ?
+      `,
+      [cotizacion_id, userId]
+    );
+
+    if (!cot) {
+      return res.status(403).json({ error: "Cotizacion no válida" });
+    }
+
+    /* ===============================
+       DATA
+    =============================== */
+
+    const [[client]] = await pool.query(
+      `
+      SELECT c.*
+      FROM clientes c
+      JOIN viajes v ON v.cliente_id = c.id
+      JOIN cotizaciones co ON co.viaje_id = v.id
+      WHERE co.id = ?
+      `,
+      [cotizacion_id]
+    );
+
+    const [[trip]] = await pool.query(
+      `
+      SELECT v.*
+      FROM viajes v
+      JOIN cotizaciones co ON co.viaje_id = v.id
+      WHERE co.id = ?
+      `,
+      [cotizacion_id]
+    );
+
+    const [services] = await pool.query(
+      `SELECT * FROM servicios WHERE cotizacion_id = ?`,
+      [cotizacion_id]
+    );
+
+    /* ===============================
+       PDF
+    =============================== */
+
+    const fileName = `cotizacion_${cotizacion_id}_${mode}_${Date.now()}.pdf`;
+    const publicUrl = `/assets/pdfs/${fileName}`;
+
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+
+    doc.pipe(res);
+
+    drawHeader(doc);
+    drawClientBlock(doc, client);
+    drawTripBlock(doc, trip);
+    drawServicesTable(doc, services);
+
+    doc.end();
+
+    /* ===============================
+       SAVE DB
+    =============================== */
+
+    await pool.query(
+      `INSERT INTO pdfs (cotizacion_id, nombre, url, tipo, user_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [cotizacion_id, fileName, publicUrl, mode, userId]
+    );
+
+  } catch (err) {
+    console.error("GENERATE PDF ERROR:", err);
+    res.status(500).json({ error: "Error generando PDF" });
   }
-
-  /* ===============================
-     QUERIES
-  =============================== */
-
-  const [[client]] = await pool.query(
-    `
-    SELECT c.*
-    FROM clientes c
-    JOIN viajes v ON v.cliente_id = c.id
-    JOIN cotizaciones co ON co.viaje_id = v.id
-    WHERE co.id = ?
-    `,
-    [cotizacion_id]
-  );
-
-  const [[trip]] = await pool.query(
-    `
-    SELECT v.*
-    FROM viajes v
-    JOIN cotizaciones co ON co.viaje_id = v.id
-    WHERE co.id = ?
-    `,
-    [cotizacion_id]
-  );
-
-  const [services] = await pool.query(
-    `
-    SELECT *
-    FROM servicios
-    WHERE cotizacion_id = ?
-    `,
-    [cotizacion_id]
-  );
-
-  /* ===============================
-     CREAR DOCUMENTO
-  =============================== */
-
-  const fileName = `cotizacion_${cotizacion_id}_${mode}_${Date.now()}.pdf`;
-  const publicUrl = `/assets/pdfs/${fileName}`;
-
-  const doc = new PDFDocument({ margin: 50 });
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
-
-  doc.pipe(res);
-
-  /* ===============================
-     RENDER PDF
-  =============================== */
-
-  drawHeader(doc);
-  drawClientBlock(doc, client);
-  drawTripBlock(doc, trip);
-  drawServicesTable(doc, services);
-
-  doc.end();
-
-  /* ===============================
-     GUARDAR METADATA
-  =============================== */
-
-  await pool.query(
-    `INSERT INTO pdfs (cotizacion_id, nombre, url, tipo)
-     VALUES (?, ?, ?, ?)`,
-    [cotizacion_id, fileName, publicUrl, mode]
-  );
 }
 
 /* ===============================
-   LISTAR PDFs
+   LISTAR PDFs (ownership)
 ================================ */
 
 export async function getPdfsByCotizacion(req, res) {
-  const { cotizacionId } = req.params;
+  try {
+    const userId = req.user.id;
+    const { cotizacionId } = req.params;
 
-  const [rows] = await pool.query(
-    "SELECT * FROM pdfs WHERE cotizacion_id = ? ORDER BY created_at DESC",
-    [cotizacionId]
-  );
+    const [rows] = await pool.query(
+      `
+      SELECT p.*
+      FROM pdfs p
+      JOIN cotizaciones c ON p.cotizacion_id = c.id
+      JOIN viajes v ON c.viaje_id = v.id
+      JOIN clientes cl ON v.cliente_id = cl.id
+      WHERE p.cotizacion_id = ?
+        AND cl.created_by = ?
+      ORDER BY p.created_at DESC
+      `,
+      [cotizacionId, userId]
+    );
 
-  res.json(rows);
+    res.json(rows);
+
+  } catch (err) {
+    console.error("GET PDFS ERROR:", err);
+    res.status(500).json({ error: "Error obteniendo PDFs" });
+  }
 }
 
 /* ===============================
-   OBTENER ÚLTIMO PDF DE USUARIO
+   ÚLTIMO PDF
 ================================ */
 
 export async function getLatestPdf(req, res) {
-  const { cotizacionId } = req.params;
-  const userId = req.user?.id; // asegúrate de tener middleware de auth
-
-  if (!userId) {
-    return res.status(401).json({ error: "Usuario no autorizado" });
-  }
-
   try {
+    const userId = req.user.id;
+    const { cotizacionId } = req.params;
+
     const [rows] = await pool.query(
       `
-      SELECT url AS file_path, nombre
-      FROM pdfs
-      WHERE cotizacion_id = ? AND user_id = ?
-      ORDER BY created_at DESC
+      SELECT p.*
+      FROM pdfs p
+      JOIN cotizaciones c ON p.cotizacion_id = c.id
+      JOIN viajes v ON c.viaje_id = v.id
+      JOIN clientes cl ON v.cliente_id = cl.id
+      WHERE p.cotizacion_id = ?
+        AND cl.created_by = ?
+      ORDER BY p.created_at DESC
       LIMIT 1
       `,
       [cotizacionId, userId]
@@ -146,11 +181,12 @@ export async function getLatestPdf(req, res) {
     }
 
     const pdf = rows[0];
-    const fullPath = path.join(__dirname, "..", pdf.file_path);
+    const fullPath = path.join(__dirname, "..", pdf.url);
 
     res.download(fullPath, pdf.nombre);
+
   } catch (err) {
-    console.error(err);
+    console.error("LATEST PDF ERROR:", err);
     res.status(500).json({ error: "Error obteniendo PDF" });
   }
 }
@@ -164,12 +200,8 @@ function drawHeader(doc) {
     doc.image(logoPath, 50, 40, { width: 120 });
   } catch {}
 
-  doc
-    .fontSize(18)
-    .text("Lean Travel", 200, 50);
-
-  doc
-    .fontSize(10)
+  doc.fontSize(18).text("Lean Travel", 200, 50);
+  doc.fontSize(10)
     .text("info@leantravel.com", 200, 70)
     .text("+54 223 XXXXXXX", 200, 85);
 

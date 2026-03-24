@@ -1,4 +1,6 @@
 import express from "express";
+import authMiddleware from "../middlewares/auth.middleware.js";
+
 import {
   createSection,
   getSections,
@@ -8,6 +10,18 @@ import {
 
 const router = express.Router();
 
+/*
+===========================
+PROTEGER TODAS LAS RUTAS
+===========================
+*/
+router.use(authMiddleware);
+
+/*
+===========================
+ROUTES
+===========================
+*/
 router.post("/", createSection);
 router.get("/:cotizacion_id", getSections);
 router.put("/:id", updateSection);
