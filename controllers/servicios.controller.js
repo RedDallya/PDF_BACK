@@ -113,11 +113,8 @@ export const updateServicio = async (req, res) => {
       return res.status(404).json({ error: "Servicio no existe" });
     }
 
-    await ServModel.updateServicio(conn, id, req.body);
+    await ServModel.updateServicio(conn, id, data, userId);
 
-    if (req.body.metadata !== undefined) {
-      await MetaModel.saveServicioMetadata(conn, id, req.body.metadata);
-    }
 
     await conn.commit();
 
@@ -151,7 +148,7 @@ export const deleteServicio = async (req, res) => {
       return res.status(404).json({ error: "Servicio no existe" });
     }
 
-    await ServModel.deleteServicio(conn, id);
+    await ServModel.deleteServicio(conn, id, userId);
 
     await conn.commit();
 

@@ -104,7 +104,7 @@ export async function createServicio(conn, data) {
 /* =========================================
 UPDATE SERVICIO (conn, ownership ya validado)
 ========================================= */
-export async function updateServicio(conn, id, data) {
+export async function updateServicio(conn, id, data, userId) {
   const {
     categoria,
     descripcion,
@@ -116,18 +116,23 @@ export async function updateServicio(conn, id, data) {
     subtotal
   } = data;
 
-  await conn.query(
+  const [result] = await conn.query(
     `
-    UPDATE servicios SET
-      categoria = ?,
-      descripcion = ?,
-      observaciones = ?,
-      moneda = ?,
-      precio = ?,
-      adultos = ?,
-      menores = ?,
-      subtotal = ?
-    WHERE id = ?
+    UPDATE servicios s
+    JOIN cotizaciones c   ON s.cotizacion_id = c.id
+    JOIN viajes v         ON c.viaje_id = v.id
+    JOIN clientes cl      ON v.cliente_id = cl.id
+    SET
+      s.categoria = ?,
+      s.descripcion = ?,
+      s.observaciones = ?,
+      s.moneda = ?,
+      s.precio = ?,
+      s.adultos = ?,
+      s.menores = ?,
+      s.subtotal = ?
+    WHERE s.id = ?
+      AND cl.created_by = ?
     `,
     [
       categoria,
@@ -138,19 +143,31 @@ export async function updateServicio(conn, id, data) {
       adultos,
       menores,
       subtotal,
-      id
+      id,
+      userId
     ]
   );
+
+  return result.affectedRows > 0;
 }
 
 /* =========================================
 DELETE SERVICIO (conn, ownership ya validado)
 ========================================= */
-export async function deleteServicio(conn, id) {
-  await conn.query(
-    `DELETE FROM servicios WHERE id = ?`,
-    [id]
+export async function deleteServicio(conn, id, userId) {
+  const [result] = await conn.query(
+    `
+    DELETE s FROM servicios s
+    JOIN cotizaciones c   ON s.cotizacion_id = c.id
+    JOIN viajes v         ON c.viaje_id = v.id
+    JOIN clientes cl      ON v.cliente_id = cl.id
+    WHERE s.id = ?
+      AND cl.created_by = ?
+    `,
+    [id, userId]
   );
+
+  return result.affectedRows > 0;
 }
 
 /* =========================================
