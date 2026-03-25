@@ -1,12 +1,16 @@
 import PDFDocument from "pdfkit";
 import pool from "../config/db.js";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const logoPath = path.join(__dirname, "../assets/logo.png");
+const pdfDir = path.join(__dirname, "../assets/pdfs");
+
+fs.mkdirSync(pdfDir, { recursive: true });
 
 /* ===============================
    ENDPOINTS
@@ -80,7 +84,12 @@ async function generatePdf(req, res, mode) {
     );
 
     const [services] = await pool.query(
-      `SELECT * FROM servicios WHERE cotizacion_id = ?`,
+      `
+      SELECT *
+      FROM servicios
+      WHERE cotizacion_id = ?
+      ORDER BY id ASC
+      `,
       [cotizacion_id]
     );
 
@@ -90,34 +99,47 @@ async function generatePdf(req, res, mode) {
 
     const fileName = `cotizacion_${cotizacion_id}_${mode}_${Date.now()}.pdf`;
     const publicUrl = `/assets/pdfs/${fileName}`;
+    const fullFilePath = path.join(pdfDir, fileName);
 
     const doc = new PDFDocument({ margin: 50 });
+    const fileStream = fs.createWriteStream(fullFilePath);
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
+    doc.pipe(fileStream);
     doc.pipe(res);
 
     drawHeader(doc);
     drawClientBlock(doc, client);
     drawTripBlock(doc, trip);
-    drawServicesTable(doc, services);
+    drawServicesTable(doc, services, mode);
 
     doc.end();
+
+    await new Promise((resolve, reject) => {
+      fileStream.on("finish", resolve);
+      fileStream.on("error", reject);
+    });
 
     /* ===============================
        SAVE DB
     =============================== */
 
     await pool.query(
-      `INSERT INTO pdfs (cotizacion_id, nombre, url, tipo, user_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `
+      INSERT INTO pdfs (cotizacion_id, nombre, url, tipo, user_id)
+      VALUES (?, ?, ?, ?, ?)
+      `,
       [cotizacion_id, fileName, publicUrl, mode, userId]
     );
 
   } catch (err) {
     console.error("GENERATE PDF ERROR:", err);
-    res.status(500).json({ error: "Error generando PDF" });
+
+    if (!res.headersSent) {
+      return res.status(500).json({ error: "Error generando PDF" });
+    }
   }
 }
 
@@ -139,7 +161,7 @@ export async function getPdfsByCotizacion(req, res) {
       JOIN clientes cl ON v.cliente_id = cl.id
       WHERE p.cotizacion_id = ?
         AND cl.created_by = ?
-      ORDER BY p.created_at DESC
+      ORDER BY p.created_at DESC, p.id DESC
       `,
       [cotizacionId, userId]
     );
@@ -170,7 +192,7 @@ export async function getLatestPdf(req, res) {
       JOIN clientes cl ON v.cliente_id = cl.id
       WHERE p.cotizacion_id = ?
         AND cl.created_by = ?
-      ORDER BY p.created_at DESC
+      ORDER BY p.created_at DESC, p.id DESC
       LIMIT 1
       `,
       [cotizacionId, userId]
@@ -181,9 +203,14 @@ export async function getLatestPdf(req, res) {
     }
 
     const pdf = rows[0];
-    const fullPath = path.join(__dirname, "..", pdf.url);
+    const normalizedUrl = String(pdf.url || "").replace(/^\/+/, "");
+    const fullPath = path.join(__dirname, "..", normalizedUrl);
 
-    res.download(fullPath, pdf.nombre);
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: "Archivo PDF no encontrado en disco" });
+    }
+
+    return res.download(fullPath, pdf.nombre);
 
   } catch (err) {
     console.error("LATEST PDF ERROR:", err);
@@ -197,7 +224,9 @@ export async function getLatestPdf(req, res) {
 
 function drawHeader(doc) {
   try {
-    doc.image(logoPath, 50, 40, { width: 120 });
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 50, 40, { width: 120 });
+    }
   } catch {}
 
   doc.fontSize(18).text("Lean Travel", 200, 50);
@@ -227,20 +256,37 @@ function drawTripBlock(doc, trip) {
 
   doc.fontSize(10)
     .text(`Destino: ${trip?.destino || "-"}`)
-    .text(`Fecha inicio: ${trip?.fecha_inicio || "-"}`)
-    .text(`Fecha fin: ${trip?.fecha_fin || "-"}`);
+    .text(`Fecha inicio: ${formatDateForPdf(trip?.fecha_inicio)}`)
+    .text(`Fecha fin: ${formatDateForPdf(trip?.fecha_fin)}`);
 
   doc.moveDown();
 }
 
-function drawServicesTable(doc, services) {
+function drawServicesTable(doc, services, mode) {
   doc.fontSize(12).text("Servicios", { underline: true });
   doc.moveDown();
 
-  services.forEach(s => {
-    doc.fontSize(10)
-      .text(`${s.categoria} - ${s.descripcion}`)
-      .text(`Subtotal: ${s.moneda} ${s.subtotal}`);
+  if (!services?.length) {
+    doc.fontSize(10).text("No hay servicios cargados.");
+    doc.moveDown();
+    return;
+  }
+
+  services.forEach((s) => {
+    doc.fontSize(10).text(`${s.categoria || "-"} - ${s.descripcion || "-"}`);
+
+    if (mode === "full") {
+      doc.text(`Subtotal: ${s.moneda || "-"} ${Number(s.subtotal || 0).toFixed(2)}`);
+    }
+
     doc.moveDown();
   });
+}
+
+function formatDateForPdf(value) {
+  if (!value) return "-";
+  const raw = String(value);
+  if (raw.includes("T")) return raw.split("T")[0];
+  if (raw.includes(" ")) return raw.split(" ")[0];
+  return raw;
 }

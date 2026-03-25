@@ -13,7 +13,7 @@ export const getVouchersByViaje = async (req, res) => {
     const vouchers = await VoucherModel.getByViaje(viajeId, userId);
 
     const hydrated = await Promise.all(
-      vouchers.map(async voucher => {
+      vouchers.map(async (voucher) => {
         const files = await VoucherFileModel.getFilesByVoucher(voucher.id, userId);
         return { ...voucher, files };
       })
@@ -58,6 +58,8 @@ export const createVoucher = async (req, res) => {
   try {
     const userId = req.user.id;
 
+    const body = req.body || {};
+
     const {
       viaje_id,
       tipo,
@@ -66,7 +68,7 @@ export const createVoucher = async (req, res) => {
       fecha_asociada,
       visible_cliente,
       notes
-    } = req.body || {};
+    } = body;
 
     if (!viaje_id) {
       return res.status(400).json({ error: "viaje_id requerido" });
@@ -113,6 +115,7 @@ export const updateVoucher = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
+    const body = req.body || {};
 
     const exists = await VoucherModel.getById(id, userId);
 
@@ -120,9 +123,17 @@ export const updateVoucher = async (req, res) => {
       return res.status(404).json({ error: "Voucher no encontrado" });
     }
 
+    if (!req.body || Object.keys(body).length === 0) {
+      return res.status(400).json({ error: "Body requerido" });
+    }
+
+    if (!body.tipo) {
+      return res.status(400).json({ error: "tipo requerido" });
+    }
+
     await conn.beginTransaction();
 
-    await VoucherModel.updateVoucher(conn, id, req.body, userId);
+    await VoucherModel.updateVoucher(conn, id, body, userId);
 
     await conn.commit();
 

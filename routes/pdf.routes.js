@@ -1,5 +1,5 @@
-// pdf.routes.js
 import express from "express";
+import authMiddleware from "../middlewares/auth.middleware.js";
 import {
   generatePartialPdf,
   generateFullPdf,
@@ -9,21 +9,17 @@ import {
 
 const router = express.Router();
 
-// Generar PDF parcial
-// GET /pdf/partial?cotizacion_id=123
+/* ===========================
+PROTEGER TODAS LAS RUTAS
+=========================== */
+router.use(authMiddleware);
+
+/* ===========================
+ROUTES
+=========================== */
 router.get("/partial", generatePartialPdf);
-
-// Generar PDF completo
-// GET /pdf/full?cotizacion_id=123
 router.get("/full", generateFullPdf);
-
-// Listar todos los PDFs de una cotización
-// GET /pdf/:cotizacionId
+router.get("/latest/:cotizacionId", getLatestPdf);
 router.get("/:cotizacionId", getPdfsByCotizacion);
 
-// Obtener el último PDF de un usuario para una cotización
-// GET /pdf/latest/:cotizacionId
-router.get("/latest/:cotizacionId", getLatestPdf);
-
 export default router;
-

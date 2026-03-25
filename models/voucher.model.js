@@ -46,7 +46,7 @@ export async function getById(id, userId) {
 /* =========================================
 CREATE
 ========================================= */
-export async function createVoucher(conn, data) {
+export async function createVoucher(conn, data = {}) {
   const {
     viaje_id,
     tipo,
@@ -105,7 +105,7 @@ export async function createVoucher(conn, data) {
 /* =========================================
 UPDATE (ownership)
 ========================================= */
-export async function updateVoucher(conn, id, data, userId) {
+export async function updateVoucher(conn, id, data = {}, userId) {
   const {
     tipo,
     servicio,
@@ -114,6 +114,10 @@ export async function updateVoucher(conn, id, data, userId) {
     visible_cliente,
     notes
   } = data;
+
+  if (!tipo) {
+    throw new Error("tipo requerido");
+  }
 
   const [result] = await conn.query(
     `
