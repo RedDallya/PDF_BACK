@@ -6,10 +6,9 @@ GET OPERATORS BY VIAJE
 ========================================= */
 export const getOperatorsByViaje = async (req, res) => {
   try {
-    const userId = req.user.id;
     const { viajeId } = req.params;
 
-    const operators = await OperatorModel.getByViaje(viajeId, userId);
+    const operators = await OperatorModel.getByViaje(viajeId);
 
     res.json(operators);
   } catch (err) {

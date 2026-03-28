@@ -1,41 +1,32 @@
 import db from "../config/db.js";
 
 /* =========================================
-OWNERSHIP JOIN BASE
+GET ALL BY VIAJE (lectura global)
 ========================================= */
-const OWNERSHIP_JOIN = `
-  FROM operadores o
-  JOIN viajes v ON o.viaje_id = v.id
-`;
-
-/* =========================================
-GET ALL BY VIAJE (ownership)
-========================================= */
-export async function getByViaje(viajeId, userId) {
+export async function getByViaje(viajeId) {
   const [rows] = await db.query(
     `
     SELECT o.*
-    ${OWNERSHIP_JOIN}
+    FROM operadores o
     WHERE o.viaje_id = ?
-      AND v.created_by = ?
     ORDER BY o.updated_at DESC, o.id DESC
     `,
-    [viajeId, userId]
+    [viajeId]
   );
 
   return rows;
 }
 
 /* =========================================
-GET BY ID (ownership)
+GET BY ID (solo owner)
 ========================================= */
 export async function getById(id, userId) {
   const [rows] = await db.query(
     `
     SELECT o.*
-    ${OWNERSHIP_JOIN}
+    FROM operadores o
     WHERE o.id = ?
-      AND v.created_by = ?
+      AND o.created_by = ?
     `,
     [id, userId]
   );
@@ -65,9 +56,8 @@ export async function createOperator(conn, data) {
     SELECT id
     FROM viajes
     WHERE id = ?
-      AND created_by = ?
     `,
-    [viaje_id, created_by]
+    [viaje_id]
   );
 
   if (!check.length) {
@@ -109,7 +99,7 @@ export async function createOperator(conn, data) {
 }
 
 /* =========================================
-UPDATE (ownership)
+UPDATE (solo owner)
 ========================================= */
 export async function updateOperator(conn, id, data, userId) {
   const {
@@ -126,7 +116,6 @@ export async function updateOperator(conn, id, data, userId) {
   const [result] = await conn.query(
     `
     UPDATE operadores o
-    JOIN viajes v ON o.viaje_id = v.id
     SET
       o.nombre = ?,
       o.tipo_servicio = ?,
@@ -137,7 +126,7 @@ export async function updateOperator(conn, id, data, userId) {
       o.condiciones_comerciales = ?,
       o.notes = ?
     WHERE o.id = ?
-      AND v.created_by = ?
+      AND o.created_by = ?
     `,
     [
       nombre,
@@ -157,15 +146,14 @@ export async function updateOperator(conn, id, data, userId) {
 }
 
 /* =========================================
-DELETE (ownership)
+DELETE (solo owner)
 ========================================= */
 export async function deleteOperator(conn, id, userId) {
   const [result] = await conn.query(
     `
-    DELETE o FROM operadores o
-    JOIN viajes v ON o.viaje_id = v.id
-    WHERE o.id = ?
-      AND v.created_by = ?
+    DELETE FROM operadores
+    WHERE id = ?
+      AND created_by = ?
     `,
     [id, userId]
   );

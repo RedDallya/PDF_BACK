@@ -48,15 +48,14 @@ export async function getCotizacionById(id, userId) {
 CREATE COTIZACION (valida viaje del usuario)
 ========================================= */
 export async function createCotizacion(conn, data) {
- const {
-  viaje_id,
-  titulo,
-  condicion_legal,
-  created_by
-} = data;
+  const {
+    viaje_id,
+    titulo,
+    condicion_legal,
+    fecha_creacion,
+    created_by
+  } = data;
 
-
-  // validar que el viaje pertenezca al usuario
   const [check] = await conn.query(
     `
     SELECT v.id
@@ -75,10 +74,24 @@ export async function createCotizacion(conn, data) {
   const [result] = await conn.query(
     `
     INSERT INTO cotizaciones
-    (viaje_id, titulo, condicion_legal,created_by, updated_by)
-    VALUES (?, ?, ?,?,?)
+    (
+      viaje_id,
+      titulo,
+      condicion_legal,
+      fecha_creacion,
+      created_by,
+      updated_by
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
     `,
-    [viaje_id, titulo, condicion_legal, created_by, created_by]
+    [
+      viaje_id,
+      titulo,
+      condicion_legal || null,
+      fecha_creacion || null,
+      created_by,
+      created_by
+    ]
   );
 
   return result.insertId;
@@ -91,6 +104,7 @@ export async function updateCotizacion(conn, id, data, userId) {
   const {
     titulo,
     condicion_legal,
+    fecha_creacion,
     estado
   } = data;
 
@@ -102,15 +116,26 @@ export async function updateCotizacion(conn, id, data, userId) {
     SET 
       c.titulo = ?,
       c.condicion_legal = ?,
-      c.estado = ?
+      c.fecha_creacion = ?,
+      c.estado = ?,
+      c.updated_by = ?
     WHERE c.id = ?
       AND cl.created_by = ?
     `,
-    [titulo, condicion_legal, estado, id, userId]
+    [
+      titulo,
+      condicion_legal || null,
+      fecha_creacion || null,
+      estado || null,
+      userId,
+      id,
+      userId
+    ]
   );
 
   return result.affectedRows > 0;
 }
+
 /* =========================================
 DELETE COTIZACION (conn)
 ========================================= */

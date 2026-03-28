@@ -7,10 +7,26 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const logoPath = path.join(__dirname, "../assets/logo.png");
+const defaultLogoPath = path.join(__dirname, "../assets/logo.png");
 const pdfDir = path.join(__dirname, "../assets/pdfs");
 
 fs.mkdirSync(pdfDir, { recursive: true });
+
+/* ===============================
+   FALLBACK BRANDING
+================================ */
+
+const DEFAULT_BRANDING = {
+  company_name: "Lean Travel",
+  company_email: "info@leantravel.com",
+  company_phone: "+54 223 XXXXXXX",
+  company_address: "",
+  company_website: "",
+  logo_path: defaultLogoPath,
+  pdf_footer: "",
+  primary_color: "",
+  secondary_color: ""
+};
 
 /* ===============================
    ENDPOINTS
@@ -41,26 +57,28 @@ async function generatePdf(req, res, mode) {
       return res.status(400).json({ error: "cotizacion_id requerido" });
     }
 
-    /* 🔐 VALIDAR OWNERSHIP */
+    /* 🔓 VALIDAR EXISTENCIA GLOBAL DE LA COTIZACION */
     const [[cot]] = await pool.query(
       `
       SELECT co.id
       FROM cotizaciones co
-      JOIN viajes v    ON co.viaje_id = v.id
-      JOIN clientes cl ON v.cliente_id = cl.id
       WHERE co.id = ?
-        AND cl.created_by = ?
       `,
-      [cotizacion_id, userId]
+      [cotizacion_id]
     );
 
     if (!cot) {
-      return res.status(403).json({ error: "Cotizacion no válida" });
+      return res.status(404).json({ error: "Cotización no encontrada" });
     }
 
     /* ===============================
        DATA
     =============================== */
+
+    const [[quote]] = await pool.query(
+      `SELECT * FROM cotizaciones WHERE id = ?`,
+      [cotizacion_id]
+    );
 
     const [[client]] = await pool.query(
       `
@@ -84,14 +102,49 @@ async function generatePdf(req, res, mode) {
     );
 
     const [services] = await pool.query(
+      `SELECT * FROM servicios WHERE cotizacion_id = ? ORDER BY id ASC`,
+      [cotizacion_id]
+    );
+
+    const [sections] = await pool.query(
       `
       SELECT *
-      FROM servicios
+      FROM pdf_sections
       WHERE cotizacion_id = ?
-      ORDER BY id ASC
+      ORDER BY orden ASC, id ASC
       `,
       [cotizacion_id]
     );
+
+    let vouchers = [];
+    let operators = [];
+
+    if (trip?.id) {
+      const [voucherRows] = await pool.query(
+        `
+        SELECT *
+        FROM vouchers
+        WHERE viaje_id = ?
+          AND visible_cliente = 1
+        ORDER BY fecha_asociada ASC, id ASC
+        `,
+        [trip.id]
+      );
+      vouchers = voucherRows || [];
+
+      const [operatorRows] = await pool.query(
+        `
+        SELECT *
+        FROM operadores
+        WHERE viaje_id = ?
+        ORDER BY id ASC
+        `,
+        [trip.id]
+      );
+      operators = operatorRows || [];
+    }
+
+    const branding = await getBrandingForUser(userId);
 
     /* ===============================
        PDF
@@ -110,10 +163,29 @@ async function generatePdf(req, res, mode) {
     doc.pipe(fileStream);
     doc.pipe(res);
 
-    drawHeader(doc);
-    drawClientBlock(doc, client);
-    drawTripBlock(doc, trip);
-    drawServicesTable(doc, services, mode);
+    drawHeader(doc, branding);
+
+    if (sections.length) {
+      drawDynamicSections(doc, sections, {
+        client,
+        trip,
+        services,
+        vouchers,
+        operators,
+        quote,
+        mode,
+        branding
+      });
+    } else {
+      drawQuoteBlock(doc, quote, mode);
+      drawClientBlock(doc, client);
+      drawTripBlock(doc, trip);
+      drawServicesTable(doc, services, mode);
+      drawVouchersBlock(doc, vouchers);
+      drawOperatorsBlock(doc, operators);
+      drawLegalBlock(doc, quote);
+      drawFooterBlock(doc, branding);
+    }
 
     doc.end();
 
@@ -122,10 +194,6 @@ async function generatePdf(req, res, mode) {
       fileStream.on("error", reject);
     });
 
-    /* ===============================
-       SAVE DB
-    =============================== */
-
     await pool.query(
       `
       INSERT INTO pdfs (cotizacion_id, nombre, url, tipo, user_id)
@@ -133,7 +201,6 @@ async function generatePdf(req, res, mode) {
       `,
       [cotizacion_id, fileName, publicUrl, mode, userId]
     );
-
   } catch (err) {
     console.error("GENERATE PDF ERROR:", err);
 
@@ -144,7 +211,7 @@ async function generatePdf(req, res, mode) {
 }
 
 /* ===============================
-   LISTAR PDFs (ownership)
+   LISTAR PDFs (lectura global)
 ================================ */
 
 export async function getPdfsByCotizacion(req, res) {
@@ -152,22 +219,28 @@ export async function getPdfsByCotizacion(req, res) {
     const userId = req.user.id;
     const { cotizacionId } = req.params;
 
+    const [[cot]] = await pool.query(
+      `SELECT id FROM cotizaciones WHERE id = ?`,
+      [cotizacionId]
+    );
+
+    if (!cot) {
+      return res.status(404).json({ error: "Cotización no encontrada" });
+    }
+
     const [rows] = await pool.query(
       `
-      SELECT p.*
+      SELECT
+        p.*,
+        CASE WHEN p.user_id = ? THEN 1 ELSE 0 END AS can_edit
       FROM pdfs p
-      JOIN cotizaciones c ON p.cotizacion_id = c.id
-      JOIN viajes v ON c.viaje_id = v.id
-      JOIN clientes cl ON v.cliente_id = cl.id
       WHERE p.cotizacion_id = ?
-        AND cl.created_by = ?
       ORDER BY p.created_at DESC, p.id DESC
       `,
-      [cotizacionId, userId]
+      [userId, cotizacionId]
     );
 
     res.json(rows);
-
   } catch (err) {
     console.error("GET PDFS ERROR:", err);
     res.status(500).json({ error: "Error obteniendo PDFs" });
@@ -175,27 +248,31 @@ export async function getPdfsByCotizacion(req, res) {
 }
 
 /* ===============================
-   ÚLTIMO PDF
+   ÚLTIMO PDF (lectura global)
 ================================ */
 
 export async function getLatestPdf(req, res) {
   try {
-    const userId = req.user.id;
     const { cotizacionId } = req.params;
+
+    const [[cot]] = await pool.query(
+      `SELECT id FROM cotizaciones WHERE id = ?`,
+      [cotizacionId]
+    );
+
+    if (!cot) {
+      return res.status(404).json({ error: "Cotización no encontrada" });
+    }
 
     const [rows] = await pool.query(
       `
       SELECT p.*
       FROM pdfs p
-      JOIN cotizaciones c ON p.cotizacion_id = c.id
-      JOIN viajes v ON c.viaje_id = v.id
-      JOIN clientes cl ON v.cliente_id = cl.id
       WHERE p.cotizacion_id = ?
-        AND cl.created_by = ?
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 1
       `,
-      [cotizacionId, userId]
+      [cotizacionId]
     );
 
     if (!rows.length) {
@@ -211,7 +288,6 @@ export async function getLatestPdf(req, res) {
     }
 
     return res.download(fullPath, pdf.nombre);
-
   } catch (err) {
     console.error("LATEST PDF ERROR:", err);
     res.status(500).json({ error: "Error obteniendo PDF" });
@@ -219,23 +295,192 @@ export async function getLatestPdf(req, res) {
 }
 
 /* ===============================
+   BRANDING
+================================ */
+
+async function getBrandingForUser(userId) {
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        company_name,
+        company_email,
+        company_phone,
+        company_address,
+        company_website,
+        logo_path,
+        pdf_footer,
+        primary_color,
+        secondary_color
+      FROM user_company_profiles
+      WHERE user_id = ?
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+    const profile = rows?.[0];
+
+    if (!profile) {
+      return { ...DEFAULT_BRANDING };
+    }
+
+    const resolvedLogoPath = resolveLogoPath(profile.logo_path);
+
+    return {
+      company_name: profile.company_name || DEFAULT_BRANDING.company_name,
+      company_email: profile.company_email || DEFAULT_BRANDING.company_email,
+      company_phone: profile.company_phone || DEFAULT_BRANDING.company_phone,
+      company_address: profile.company_address || DEFAULT_BRANDING.company_address,
+      company_website: profile.company_website || DEFAULT_BRANDING.company_website,
+      logo_path: resolvedLogoPath,
+      pdf_footer: profile.pdf_footer || DEFAULT_BRANDING.pdf_footer,
+      primary_color: profile.primary_color || DEFAULT_BRANDING.primary_color,
+      secondary_color: profile.secondary_color || DEFAULT_BRANDING.secondary_color
+    };
+  } catch (error) {
+    console.error("GET BRANDING ERROR:", error);
+    return { ...DEFAULT_BRANDING };
+  }
+}
+
+function resolveLogoPath(logoPathFromDb) {
+  if (!logoPathFromDb) return defaultLogoPath;
+
+  const normalized = String(logoPathFromDb).trim();
+  if (!normalized) return defaultLogoPath;
+
+  if (path.isAbsolute(normalized)) {
+    return fs.existsSync(normalized) ? normalized : defaultLogoPath;
+  }
+
+  const withoutLeadingSlash = normalized.replace(/^\/+/, "");
+  const candidatePath = path.join(__dirname, "..", withoutLeadingSlash);
+
+  if (fs.existsSync(candidatePath)) {
+    return candidatePath;
+  }
+
+  return defaultLogoPath;
+}
+
+/* ===============================
+   RENDER DINÁMICO
+================================ */
+
+function drawDynamicSections(doc, sections, context) {
+  sections.forEach(section => {
+    const tipo = section.tipo;
+    const contenido = normalizeMetadata(section.contenido);
+
+    ensureSpace(doc, 120);
+
+    switch (tipo) {
+      case "titulo":
+        doc.fontSize(16).text(contenido.texto || "Título");
+        doc.moveDown();
+        break;
+
+      case "mensaje":
+        doc.fontSize(10).text(contenido.texto || "");
+        doc.moveDown();
+        break;
+
+      case "cliente":
+        drawClientBlock(doc, context.client);
+        break;
+
+      case "viaje":
+        drawTripBlock(doc, context.trip);
+        break;
+
+      case "servicios":
+        drawServicesTable(doc, context.services, context.mode);
+        break;
+
+      case "vouchers":
+        drawVouchersBlock(doc, context.vouchers);
+        break;
+
+      case "operadores":
+        drawOperatorsBlock(doc, context.operators);
+        break;
+
+      case "totales":
+        if (context.mode === "full") {
+          const total = context.services.reduce((acc, s) => {
+            return acc + Number(s.subtotal || 0);
+          }, 0);
+
+          doc.fontSize(12).text("Totales", { underline: true });
+          doc.text(`Total: ${total.toFixed(2)}`);
+          doc.moveDown();
+        }
+        break;
+
+      case "observaciones":
+        doc.fontSize(12).text("Observaciones", { underline: true });
+        doc.text(contenido.texto || "-");
+        doc.moveDown();
+        break;
+
+      default:
+        doc.fontSize(10).text(`[Sección desconocida: ${tipo}]`);
+        doc.moveDown();
+    }
+  });
+
+  drawFooterBlock(doc, context.branding);
+}
+
+/* ===============================
    COMPONENTES VISUALES
 ================================ */
 
-function drawHeader(doc) {
+function drawHeader(doc, branding = DEFAULT_BRANDING) {
+  const headerLogoPath = branding.logo_path || defaultLogoPath;
+
   try {
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 50, 40, { width: 120 });
+    if (headerLogoPath && fs.existsSync(headerLogoPath)) {
+      doc.image(headerLogoPath, 50, 40, { width: 120 });
     }
   } catch {}
 
-  doc.fontSize(18).text("Lean Travel", 200, 50);
-  doc.fontSize(10)
-    .text("info@leantravel.com", 200, 70)
-    .text("+54 223 XXXXXXX", 200, 85);
+  doc.fontSize(18).text(branding.company_name || DEFAULT_BRANDING.company_name, 200, 50);
+
+  const infoLines = [
+    branding.company_email || DEFAULT_BRANDING.company_email,
+    branding.company_phone || DEFAULT_BRANDING.company_phone,
+    branding.company_address || "",
+    branding.company_website || ""
+  ].filter(Boolean);
+
+  let currentY = 70;
+  infoLines.forEach(line => {
+    doc.fontSize(10).text(line, 200, currentY);
+    currentY += 15;
+  });
 
   doc.moveTo(50, 120).lineTo(550, 120).stroke();
-  doc.moveDown(2);
+  doc.y = Math.max(doc.y, 135);
+  doc.moveDown(1);
+}
+
+function drawQuoteBlock(doc, quote, mode) {
+  doc.fontSize(12).text("Datos del presupuesto", { underline: true });
+  doc.moveDown(0.5);
+
+  doc.fontSize(10)
+    .text(`Título: ${quote?.titulo || "-"}`)
+    .text(`Fecha de creación: ${formatDateForPdf(quote?.fecha_creacion)}`)
+    .text(`Estado: ${quote?.estado || "-"}`)
+    .text(`Tipo de documento: ${mode === "full" ? "PDF detallado" : "PDF parcial"}`);
+
+  if (mode === "full") {
+    doc.text(`Total estimado: ${Number(quote?.total || 0).toFixed(2)}`);
+  }
+
+  doc.moveDown();
 }
 
 function drawClientBlock(doc, client) {
@@ -247,6 +492,10 @@ function drawClientBlock(doc, client) {
     .text(`Email: ${client?.email || "-"}`)
     .text(`Teléfono: ${client?.telefono || "-"}`);
 
+  if (client?.location) {
+    doc.text(`Ciudad / País: ${client.location}`);
+  }
+
   doc.moveDown();
 }
 
@@ -257,7 +506,13 @@ function drawTripBlock(doc, trip) {
   doc.fontSize(10)
     .text(`Destino: ${trip?.destino || "-"}`)
     .text(`Fecha inicio: ${formatDateForPdf(trip?.fecha_inicio)}`)
-    .text(`Fecha fin: ${formatDateForPdf(trip?.fecha_fin)}`);
+    .text(`Fecha fin: ${formatDateForPdf(trip?.fecha_fin)}`)
+    .text(`Pasajeros / cantidad: ${trip?.pasajero || "-"}`)
+    .text(`Estado del viaje: ${trip?.estado || "-"}`);
+
+  if (trip?.notas) {
+    doc.text(`Notas del viaje: ${trip.notas}`);
+  }
 
   doc.moveDown();
 }
@@ -272,15 +527,165 @@ function drawServicesTable(doc, services, mode) {
     return;
   }
 
-  services.forEach((s) => {
-    doc.fontSize(10).text(`${s.categoria || "-"} - ${s.descripcion || "-"}`);
+  services.forEach((s, index) => {
+    const metadata = normalizeMetadata(s.metadata);
+    const precioAdulto = metadata.precio_adulto ?? s.precio_adulto ?? s.precio ?? 0;
+    const precioMenor = metadata.precio_menor ?? s.precio_menor ?? 0;
+
+    doc.fontSize(10).text(`${index + 1}. ${capitalize(s.categoria || s.tipo || "-")}`);
+    doc.fontSize(10).text(`Descripción: ${s.descripcion || "-"}`);
+
+    if (s.observaciones) {
+      doc.text(`Observaciones: ${s.observaciones}`);
+    }
+
+    doc.text(`Moneda: ${s.moneda || "-"}`);
+    doc.text(`Adultos: ${Number(s.adultos || 0)} | Menores: ${Number(s.menores || 0)}`);
 
     if (mode === "full") {
+      doc.text(`Precio adulto: ${s.moneda || "-"} ${Number(precioAdulto || 0).toFixed(2)}`);
+      doc.text(`Precio menor: ${s.moneda || "-"} ${Number(precioMenor || 0).toFixed(2)}`);
       doc.text(`Subtotal: ${s.moneda || "-"} ${Number(s.subtotal || 0).toFixed(2)}`);
+    }
+
+    drawServiceMetadata(doc, s.categoria || s.tipo, metadata);
+    doc.moveDown();
+  });
+}
+
+function drawServiceMetadata(doc, tipo, metadata = {}) {
+  const lines = [];
+
+  if (tipo === "hotel") {
+    if (metadata.field_0) lines.push(`Check-in: ${metadata.field_0}`);
+    if (metadata.field_1) lines.push(`Check-out: ${metadata.field_1}`);
+  }
+
+  if (tipo === "aereo") {
+    if (metadata.field_0) lines.push(`Aerolínea: ${metadata.field_0}`);
+    if (metadata.field_1) lines.push(`Vuelo: ${metadata.field_1}`);
+    if (metadata.field_2) lines.push(`Fecha/hora: ${metadata.field_2}`);
+    if (metadata.field_3) lines.push(`Origen/Destino: ${metadata.field_3}`);
+  }
+
+  if (tipo === "tren") {
+    if (metadata.field_0) lines.push(`Fecha/hora: ${metadata.field_0}`);
+    if (metadata.field_1) lines.push(`Lugar salida/llegada: ${metadata.field_1}`);
+  }
+
+  if (tipo === "auto") {
+    if (metadata.field_0) lines.push(`Proveedor: ${metadata.field_0}`);
+    if (metadata.field_1) lines.push(`Vehículo: ${metadata.field_1}`);
+    if (metadata.field_2) lines.push(`Coberturas: ${metadata.field_2}`);
+  }
+
+  if (!lines.length) return;
+
+  lines.forEach(line => {
+    doc.fontSize(9).text(`• ${line}`);
+  });
+}
+
+function drawVouchersBlock(doc, vouchers) {
+  if (!vouchers?.length) return;
+
+  ensureSpace(doc, 120);
+
+  doc.fontSize(12).text("Vouchers y pasajes visibles", { underline: true });
+  doc.moveDown(0.5);
+
+  vouchers.forEach((v, index) => {
+    doc.fontSize(10)
+      .text(`${index + 1}. ${v.tipo || "-"}`)
+      .text(`Servicio: ${v.servicio || "-"}`)
+      .text(`Proveedor: ${v.proveedor || "-"}`)
+      .text(`Fecha asociada: ${formatDateForPdf(v.fecha_asociada)}`);
+
+    if (v.notes) {
+      doc.text(`Notas: ${v.notes}`);
     }
 
     doc.moveDown();
   });
+}
+
+function drawOperatorsBlock(doc, operators) {
+  if (!operators?.length) return;
+
+  ensureSpace(doc, 120);
+
+  doc.fontSize(12).text("Operadores vinculados", { underline: true });
+  doc.moveDown(0.5);
+
+  operators.forEach((o, index) => {
+    doc.fontSize(10)
+      .text(`${index + 1}. ${o.nombre || "-"}`)
+      .text(`Tipo de servicio: ${o.tipo_servicio || "-"}`)
+      .text(`Contacto: ${o.contacto || "-"}`)
+      .text(`Email: ${o.email || "-"}`)
+      .text(`Teléfono: ${o.telefono || "-"}`)
+      .text(`Estado: ${o.estado || "-"}`);
+
+    if (o.condiciones_comerciales) {
+      doc.text(`Condiciones: ${o.condiciones_comerciales}`);
+    }
+
+    if (o.notes) {
+      doc.text(`Notas: ${o.notes}`);
+    }
+
+    doc.moveDown();
+  });
+}
+
+function drawLegalBlock(doc, quote) {
+  if (!quote?.condicion_legal) return;
+
+  ensureSpace(doc, 100);
+
+  doc.fontSize(12).text("Condición legal", { underline: true });
+  doc.moveDown(0.5);
+  doc.fontSize(10).text(quote.condicion_legal);
+  doc.moveDown();
+}
+
+function drawFooterBlock(doc, branding = DEFAULT_BRANDING) {
+  const footerLines = [];
+
+  if (branding.pdf_footer) footerLines.push(branding.pdf_footer);
+  if (branding.company_website) footerLines.push(branding.company_website);
+
+  if (!footerLines.length) return;
+
+  ensureSpace(doc, 80);
+
+  doc.moveDown(1);
+  doc.fontSize(9).text(footerLines.join(" | "), {
+    align: "center"
+  });
+  doc.moveDown();
+}
+
+/* ===============================
+   HELPERS
+================================ */
+
+function normalizeMetadata(metadata) {
+  if (!metadata) return {};
+
+  if (typeof metadata === "string") {
+    try {
+      return JSON.parse(metadata);
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof metadata === "object") {
+    return metadata;
+  }
+
+  return {};
 }
 
 function formatDateForPdf(value) {
@@ -289,4 +694,16 @@ function formatDateForPdf(value) {
   if (raw.includes("T")) return raw.split("T")[0];
   if (raw.includes(" ")) return raw.split(" ")[0];
   return raw;
+}
+
+function capitalize(value) {
+  const str = String(value || "");
+  if (!str) return "";
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function ensureSpace(doc, needed = 120) {
+  if (doc.y > doc.page.height - needed) {
+    doc.addPage();
+  }
 }

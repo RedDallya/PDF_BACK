@@ -22,6 +22,7 @@ import serviciosRoutes from "./routes/servicios.routes.js";
 import itineraryRoutes from "./routes/itinerary.routes.js";
 import voucherRoutes from "./routes/voucher.routes.js";
 import operatorRoutes from "./routes/operator.routes.js";
+import companyProfileRoutes from "./routes/companyProfile.routes.js";
 
 /* INIT */
 const app = express();
@@ -62,6 +63,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 /* API */
 app.use("/api/auth", authRoutes);
 app.use("/api/users", usersRoutes);
+app.use("/api/company-profile", companyProfileRoutes);
 app.use("/api/clientes", clientsRoutes);
 app.use("/api/viajes", viajesRoutes);
 app.use("/api/cotizaciones", cotizacionesRoutes);
@@ -73,6 +75,8 @@ app.use("/api/itinerarios", itineraryRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/operadores", operatorRoutes);
 app.use("/uploads", express.static("uploads"));
+
+
 /* HEALTH */
 app.get("/", (_, res) => {
   res.status(200).send("Backend funcionando 🚀");
