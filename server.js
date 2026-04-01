@@ -74,8 +74,6 @@ app.use("/api/pdf-sections", pdfSectionsRoutes);
 app.use("/api/itinerarios", itineraryRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/operadores", operatorRoutes);
-app.use("/uploads", express.static("uploads"));
-
 
 /* HEALTH */
 app.get("/", (_, res) => {

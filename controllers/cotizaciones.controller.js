@@ -54,8 +54,7 @@ export const getCotizacionesByViaje = async (req, res) => {
     const userId = req.user.id;
 
     const rows = await CotModel.getCotizacionesByViaje(
-      req.params.viajeId,
-      userId
+      req.params.viajeId
     );
 
     res.json(rows);
@@ -71,13 +70,13 @@ export const getCotizacionFull = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const cot = await CotModel.getCotizacionById(req.params.id, userId);
+    const cot = await CotModel.getCotizacionById(req.params.id);
 
     if (!cot) {
       return res.status(404).json({ error: "Cotizacion no existe" });
     }
 
-    const servicios = await ServModel.getServiciosByCotizacion(req.params.id, userId);
+    const servicios = await ServModel.getServiciosByCotizacion(req.params.id);
 
     cot.servicios = servicios;
 
@@ -100,10 +99,7 @@ export const updateCotizacion = async (req, res) => {
 
     await conn.beginTransaction();
 
-    const exists = await CotModel.getCotizacionById(
-      req.params.id,
-      userId
-    );
+    const exists = await CotModel.getCotizacionById(req.params.id);
 
     if (!exists) {
       await conn.rollback();
@@ -139,10 +135,7 @@ export const deleteCotizacion = async (req, res) => {
 
     await conn.beginTransaction();
 
-    const exists = await CotModel.getCotizacionById(
-      req.params.id,
-      userId
-    );
+    const exists = await CotModel.getCotizacionById(req.params.id);
 
     if (!exists) {
       await conn.rollback();

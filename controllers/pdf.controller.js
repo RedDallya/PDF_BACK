@@ -24,8 +24,8 @@ const DEFAULT_BRANDING = {
   company_website: "",
   logo_path: defaultLogoPath,
   pdf_footer: "",
-  primary_color: "",
-  secondary_color: ""
+  layout_type: "classic",
+  cover_image_path: null
 };
 
 /* ===============================
@@ -48,6 +48,7 @@ async function generatePdf(req, res, mode) {
   try {
     const userId = req.user?.id;
     const cotizacion_id = req.body?.cotizacion_id || req.query?.cotizacion_id;
+    const profile_id = req.body?.profile_id || req.query?.profile_id;
 
     if (!userId) {
       return res.status(401).json({ error: "No autorizado" });
@@ -57,7 +58,10 @@ async function generatePdf(req, res, mode) {
       return res.status(400).json({ error: "cotizacion_id requerido" });
     }
 
-    /* 🔓 VALIDAR EXISTENCIA GLOBAL DE LA COTIZACION */
+    if (!profile_id) {
+      return res.status(400).json({ error: "profile_id requerido" });
+    }
+
     const [[cot]] = await pool.query(
       `
       SELECT co.id
@@ -70,10 +74,6 @@ async function generatePdf(req, res, mode) {
     if (!cot) {
       return res.status(404).json({ error: "Cotización no encontrada" });
     }
-
-    /* ===============================
-       DATA
-    =============================== */
 
     const [[quote]] = await pool.query(
       `SELECT * FROM cotizaciones WHERE id = ?`,
@@ -144,11 +144,7 @@ async function generatePdf(req, res, mode) {
       operators = operatorRows || [];
     }
 
-    const branding = await getBrandingForUser(userId);
-
-    /* ===============================
-       PDF
-    =============================== */
+    const branding = await getBrandingForProfile(userId, profile_id);
 
     const fileName = `cotizacion_${cotizacion_id}_${mode}_${Date.now()}.pdf`;
     const publicUrl = `/assets/pdfs/${fileName}`;
@@ -164,6 +160,10 @@ async function generatePdf(req, res, mode) {
     doc.pipe(res);
 
     drawHeader(doc, branding);
+
+    if (branding.layout_type === "proposal") {
+      drawProposalIntro(doc, branding, quote, trip, client);
+    }
 
     if (sections.length) {
       drawDynamicSections(doc, sections, {
@@ -298,34 +298,38 @@ export async function getLatestPdf(req, res) {
    BRANDING
 ================================ */
 
-async function getBrandingForUser(userId) {
+async function getBrandingForProfile(userId, profileId) {
   try {
     const [rows] = await pool.query(
       `
       SELECT
+        profile_name,
         company_name,
         company_email,
         company_phone,
         company_address,
         company_website,
         logo_path,
+        cover_image_path,
         pdf_footer,
-        primary_color,
-        secondary_color
-      FROM user_company_profiles
-      WHERE user_id = ?
+        layout_type
+      FROM pdf_brand_profiles
+      WHERE id = ?
+        AND user_id = ?
       LIMIT 1
       `,
-      [userId]
+      [profileId, userId]
     );
 
     const profile = rows?.[0];
 
     if (!profile) {
-      return { ...DEFAULT_BRANDING };
+      return {
+        ...DEFAULT_BRANDING,
+        layout_type: "classic",
+        cover_image_path: null
+      };
     }
-
-    const resolvedLogoPath = resolveLogoPath(profile.logo_path);
 
     return {
       company_name: profile.company_name || DEFAULT_BRANDING.company_name,
@@ -333,35 +337,49 @@ async function getBrandingForUser(userId) {
       company_phone: profile.company_phone || DEFAULT_BRANDING.company_phone,
       company_address: profile.company_address || DEFAULT_BRANDING.company_address,
       company_website: profile.company_website || DEFAULT_BRANDING.company_website,
-      logo_path: resolvedLogoPath,
+      logo_path: profile.logo_path || null,
+      cover_image_path: profile.cover_image_path || null,
       pdf_footer: profile.pdf_footer || DEFAULT_BRANDING.pdf_footer,
-      primary_color: profile.primary_color || DEFAULT_BRANDING.primary_color,
-      secondary_color: profile.secondary_color || DEFAULT_BRANDING.secondary_color
+      layout_type: profile.layout_type || "classic"
     };
   } catch (error) {
-    console.error("GET BRANDING ERROR:", error);
-    return { ...DEFAULT_BRANDING };
+    console.error("GET BRAND PROFILE ERROR:", error);
+    return {
+      ...DEFAULT_BRANDING,
+      layout_type: "classic",
+      cover_image_path: null
+    };
   }
 }
 
-function resolveLogoPath(logoPathFromDb) {
-  if (!logoPathFromDb) return defaultLogoPath;
+function resolveAssetPath(filePathFromDb, fallback = null) {
+  if (!filePathFromDb) return fallback;
 
-  const normalized = String(logoPathFromDb).trim();
-  if (!normalized) return defaultLogoPath;
+  const normalized = String(filePathFromDb).trim().replace(/\\/g, "/");
+  if (!normalized) return fallback;
 
-  if (path.isAbsolute(normalized)) {
-    return fs.existsSync(normalized) ? normalized : defaultLogoPath;
+  const cleaned = normalized.replace(/^\/+/, "");
+  const fileName = path.basename(cleaned);
+
+  const candidates = [
+    path.join(__dirname, "..", cleaned),
+    path.join(process.cwd(), cleaned),
+    path.join(__dirname, "..", "uploads", fileName),
+    path.join(process.cwd(), "uploads", fileName)
+  ];
+
+  for (const candidatePath of candidates) {
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
   }
 
-  const withoutLeadingSlash = normalized.replace(/^\/+/, "");
-  const candidatePath = path.join(__dirname, "..", withoutLeadingSlash);
+  console.warn("No se encontró imagen:", {
+    original: filePathFromDb,
+    candidates
+  });
 
-  if (fs.existsSync(candidatePath)) {
-    return candidatePath;
-  }
-
-  return defaultLogoPath;
+  return fallback;
 }
 
 /* ===============================
@@ -408,9 +426,7 @@ function drawDynamicSections(doc, sections, context) {
 
       case "totales":
         if (context.mode === "full") {
-          const total = context.services.reduce((acc, s) => {
-            return acc + Number(s.subtotal || 0);
-          }, 0);
+          const total = context.services.reduce((acc, s) => acc + Number(s.subtotal || 0), 0);
 
           doc.fontSize(12).text("Totales", { underline: true });
           doc.text(`Total: ${total.toFixed(2)}`);
@@ -438,15 +454,31 @@ function drawDynamicSections(doc, sections, context) {
 ================================ */
 
 function drawHeader(doc, branding = DEFAULT_BRANDING) {
-  const headerLogoPath = branding.logo_path || defaultLogoPath;
+  const headerLogoPath = resolveAssetPath(branding.logo_path, defaultLogoPath);
+
+  const logoX = 50;
+  const logoY = 40;
+  const logoWidth = 120;
+  const infoX = 200;
+  const titleY = 50;
+
+  let logoBottomY = logoY;
+  let textBottomY = titleY;
 
   try {
     if (headerLogoPath && fs.existsSync(headerLogoPath)) {
-      doc.image(headerLogoPath, 50, 40, { width: 120 });
+      doc.image(headerLogoPath, logoX, logoY, { width: logoWidth });
+      logoBottomY = logoY + 90;
     }
-  } catch {}
+  } catch (err) {
+    console.error("HEADER LOGO ERROR:", err);
+  }
 
-  doc.fontSize(18).text(branding.company_name || DEFAULT_BRANDING.company_name, 200, 50);
+  doc.fontSize(18).text(
+    branding.company_name || DEFAULT_BRANDING.company_name,
+    infoX,
+    titleY
+  );
 
   const infoLines = [
     branding.company_email || DEFAULT_BRANDING.company_email,
@@ -455,14 +487,80 @@ function drawHeader(doc, branding = DEFAULT_BRANDING) {
     branding.company_website || ""
   ].filter(Boolean);
 
-  let currentY = 70;
+  let currentY = 78;
   infoLines.forEach(line => {
-    doc.fontSize(10).text(line, 200, currentY);
-    currentY += 15;
+    doc.fontSize(10).text(line, infoX, currentY);
+    currentY += 18;
   });
 
-  doc.moveTo(50, 120).lineTo(550, 120).stroke();
-  doc.y = Math.max(doc.y, 135);
+  textBottomY = currentY;
+
+  const lineY = Math.max(logoBottomY, textBottomY) + 12;
+
+  doc.moveTo(50, lineY).lineTo(550, lineY).stroke();
+
+  doc.y = lineY + 15;
+}
+function drawProposalIntro(doc, branding, quote, trip, client) {
+  ensureSpace(doc, 260);
+
+  const coverPath = resolveAssetPath(branding.cover_image_path, null);
+
+  if (coverPath && fs.existsSync(coverPath)) {
+    try {
+      doc.image(coverPath, 50, doc.y, {
+        width: 500,
+        height: 150
+      });
+      doc.y += 165;
+    } catch (err) {
+      console.error("COVER IMAGE ERROR:", err);
+    }
+  }
+
+  doc.moveDown(0.3);
+
+  doc.fontSize(20).text(
+    (quote?.titulo || "Cotización de servicios").toUpperCase(),
+    50,
+    doc.y,
+    { width: 500, align: "left" }
+  );
+
+  doc.moveDown(0.4);
+
+  const subtitle = trip?.destino || "";
+  if (subtitle) {
+    doc.fontSize(14).text(subtitle, {
+      width: 500,
+      align: "left"
+    });
+    doc.moveDown(0.2);
+  }
+
+  const fecha = formatDateForPdf(quote?.fecha_creacion);
+  if (fecha && fecha !== "-") {
+    doc.fontSize(11).text(fecha, {
+      width: 500,
+      align: "left"
+    });
+    doc.moveDown(0.8);
+  }
+
+  const saludoNombre = client?.nombre || "cliente";
+  doc.fontSize(11).text(`Hola ${saludoNombre}.`, {
+    width: 500,
+    align: "left"
+  });
+  doc.moveDown(0.4);
+
+  doc.fontSize(10).text(
+    "Te compartimos a continuación el detalle de la cotización solicitada, con los servicios, condiciones y observaciones correspondientes.",
+    {
+      width: 500,
+      align: "left"
+    }
+  );
   doc.moveDown(1);
 }
 

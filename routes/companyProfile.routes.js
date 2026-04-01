@@ -1,22 +1,39 @@
 import express from "express";
 import authMiddleware from "../middlewares/auth.middleware.js";
 import upload from "../middlewares/upload.middleware.js";
-import { uploadCompanyLogo } from "../controllers/companyProfile.controller.js";
+
 import {
-  getMyCompanyProfile,
-  saveMyCompanyProfile
+  getMyProfiles,
+  getProfileById,
+  saveProfile,
+  deleteProfile,
+  uploadProfileLogo,
+  uploadProfileCover
 } from "../controllers/companyProfile.controller.js";
 
 const router = express.Router();
 
-/* PROTEGIDO */
 router.use(authMiddleware);
 
-/* GET */
-router.get("/me", getMyCompanyProfile);
+/* LIST */
+router.get("/", getMyProfiles);
 
-/* POST / PUT */
-router.post("/me", saveMyCompanyProfile);
-router.post("/logo", upload.single("logo"), uploadCompanyLogo);
+/* GET ONE */
+router.get("/:id", getProfileById);
+
+/* CREATE */
+router.post("/", saveProfile);
+
+/* UPDATE */
+router.put("/:id", saveProfile);
+
+/* DELETE */
+router.delete("/:id", deleteProfile);
+
+/* LOGO */
+router.post("/:id/logo", upload.single("logo"), uploadProfileLogo);
+
+/* COVER */
+router.post("/:id/cover", upload.single("cover"), uploadProfileCover);
+
 export default router;
-

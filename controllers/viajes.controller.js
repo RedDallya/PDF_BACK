@@ -2,13 +2,11 @@ import pool from "../config/db.js";
 
 /*
 ===========================
-GET TRAVEL BY ID
+GET TRAVEL BY ID (GLOBAL)
 ===========================
 */
 export const getTravelById = async (req, res) => {
   try {
-    const userId = req.user?.id;
-
     const [rows] = await pool.query(
       `SELECT 
           v.*,
@@ -16,8 +14,8 @@ export const getTravelById = async (req, res) => {
        FROM viajes v
        LEFT JOIN clientes c 
           ON v.cliente_id = c.id
-       WHERE v.id = ? AND v.created_by = ?`,
-      [req.params.id, userId]
+       WHERE v.id = ?`,
+      [req.params.id]
     );
 
     if (!rows.length) {
@@ -33,7 +31,7 @@ export const getTravelById = async (req, res) => {
 
 /*
 ===========================
-CREATE TRAVEL
+CREATE TRAVEL (GLOBAL)
 ===========================
 */
 export const createTravel = async (req, res) => {
@@ -52,16 +50,6 @@ export const createTravel = async (req, res) => {
   } = req.body;
 
   try {
-    // validar que el cliente pertenece al usuario
-    const [cliente] = await pool.query(
-      `SELECT id FROM clientes WHERE id = ? AND created_by = ?`,
-      [cliente_id, userId]
-    );
-
-    if (!cliente.length) {
-      return res.status(403).json({ error: "Cliente no válido" });
-    }
-
     const [result] = await pool.query(
       `INSERT INTO viajes 
       (cliente_id, destino, nombre, fecha_inicio, fecha_fin, pasajero, tipo_viaje, estado, notas, created_by)
@@ -89,7 +77,7 @@ export const createTravel = async (req, res) => {
 
 /*
 ===========================
-UPDATE TRAVEL
+UPDATE TRAVEL (SOLO OWNER)
 ===========================
 */
 export const updateTravel = async (req, res) => {
@@ -137,7 +125,7 @@ export const updateTravel = async (req, res) => {
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({ error: "Viaje no encontrado" });
+      return res.status(403).json({ error: "No tenés permiso para editar este viaje" });
     }
 
     res.json({ message: "Viaje actualizado" });
@@ -149,7 +137,7 @@ export const updateTravel = async (req, res) => {
 
 /*
 ===========================
-DELETE TRAVEL
+DELETE TRAVEL (SOLO OWNER)
 ===========================
 */
 export const deleteTravel = async (req, res) => {
@@ -163,7 +151,7 @@ export const deleteTravel = async (req, res) => {
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({ error: "Viaje no encontrado" });
+      return res.status(403).json({ error: "No tenés permiso para eliminar este viaje" });
     }
 
     res.json({ message: "Viaje eliminado" });
@@ -175,20 +163,19 @@ export const deleteTravel = async (req, res) => {
 
 /*
 ===========================
-GET TRAVELS BY CLIENT
+GET TRAVELS BY CLIENT (GLOBAL)
 ===========================
 */
 export const getTravelsByClient = async (req, res) => {
   try {
-    const userId = req.user?.id;
     const { clienteId } = req.params;
 
     const [rows] = await pool.query(
       `SELECT *
        FROM viajes
-       WHERE cliente_id = ? AND created_by = ?
+       WHERE cliente_id = ?
        ORDER BY created_at DESC`,
-      [clienteId, userId]
+      [clienteId]
     );
 
     res.json(rows);

@@ -31,7 +31,7 @@ export const createClient = async (req, res) => {
     }
 
     // 3. Obtener cliente
-    const client = await ClientModel.getById(clientId, userId);
+    const client = await ClientModel.getById(clientId);
 
     res.status(201).json(client);
   } catch (error) {
@@ -53,7 +53,7 @@ export const getClients = async (req, res) => {
       return res.status(401).json({ error: "No autorizado" });
     }
 
-    const clients = await ClientModel.getAll(userId);
+    const clients = await ClientModel.getAll();
 
     res.json(clients);
   } catch (error) {
@@ -71,7 +71,7 @@ export const getClientById = async (req, res) => {
   try {
     const userId = req.user?.id;
 
-    const client = await ClientModel.getById(req.params.id, userId);
+    const client = await ClientModel.getById(req.params.id);
 
     if (!client) {
       return res.status(404).json({ error: "Cliente no encontrado" });
@@ -102,7 +102,7 @@ export const updateClient = async (req, res) => {
 
     await TagModel.saveClientTags(req.params.id, tags);
 
-    const client = await ClientModel.getById(req.params.id, userId);
+    const client = await ClientModel.getById(req.params.id);
 
     res.json(client);
   } catch (error) {
